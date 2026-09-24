@@ -37,6 +37,7 @@ const SocialSentiment = require("./modules/social-sentiment");
 const PORT = process.env.PORT || 3000;
 const PAPER_TRADING = process.env.PAPER_TRADING === "true";
 let paperMode = PAPER_TRADING;                       // live mutable flag
+let paperBalanceSol = Number(process.env.PAPER_START_BALANCE_SOL || "100");
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 const COLD_WALLET = process.env.COLD_WALLET_ADDRESS;
 
