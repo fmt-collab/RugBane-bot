@@ -39,13 +39,26 @@ class RealtimeMonitor {
     });
 
     this.ws.on("message", (data) => {
-      this.handleMessage(JSON.parse(data.toString()));
+      try {
+        this.handleMessage(JSON.parse(data.toString()));
+      } catch (e) {
+        // A malformed frame must never take the bot down
+        console.error("[Monitor] Bad message payload:", e.message);
+      }
+    });
+
+    // Without this listener Node re-throws "error" and the process dies
+    this.ws.on("error", (err) => {
+      console.error("[Monitor] WebSocket error:", err.message);
+      this.isMonitoring = false;
     });
 
     this.ws.on("close", () => {
       this.isMonitoring = false;
+      this.ws = null;
       console.log("[Monitor] Disconnected — reconnecting in 5s...");
-      setTimeout(() => this.startMonitoring(), 5000);
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = setTimeout(() => this.startMonitoring(), 5000);
     });
   }
 

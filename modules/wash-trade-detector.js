@@ -265,10 +265,12 @@ class WashTradeDetector {
     if (!txs || txs.length < 5) return { deduction: 0, circularPct: 0, reason: "" };
 
     // ── Build wallet trade graph ──
-    const graph = new Map(); // wallet -> Map<wallet, count>
-    const walletVolume = new Map(); // wallet -> total SOL volume
+    const graph = new Map(); // wallet -> Map<wallet, { count, amount }>
+    const walletVolume = new Map(); // wallet -> token amount moved
     const walletBuySell = new Map(); // wallet -> { buys, sells }
     const timestamps = [];
+    let totalTransferVolume = 0;
+    let circularVolume = 0;
 
     for (const tx of txs) {
       const transfers = tx.tokenTransfers || [];
@@ -278,22 +280,24 @@ class WashTradeDetector {
         const to = tr.toUserAccount || tr.to;
         if (!from || !to) continue;
 
+        const amount = Number(tr.tokenAmount) || 0;
+        totalTransferVolume += amount;
+
         if (!graph.has(from)) graph.set(from, new Map());
         const neighbors = graph.get(from);
-        neighbors.set(to, (neighbors.get(to) || 0) + 1);
+        const edge = neighbors.get(to) || { count: 0, amount: 0 };
+        edge.count += 1;
+        edge.amount += amount;
+        neighbors.set(to, edge);
 
-        // Track volumes
+        // Track real transferred volume per wallet (not the tx fee)
         const trader = tx.fromWallet || from;
-        const vol = tx.fee > 0 || tr.tokenAmount ? (tx.fee || 0) : 0;
-        walletVolume.set(trader, (walletVolume.get(trader) || 0) + vol);
+        walletVolume.set(trader, (walletVolume.get(trader) || 0) + amount);
 
         if (!walletBuySell.has(trader)) walletBuySell.set(trader, { buys: 0, sells: 0 });
         // Buy = receiving tokens, Sell = sending tokens
         const side = tr.to === trader || tr.toUserAccount === trader ? "buys" : "sells";
-        walletBuySell.get(trader)[side] += tr.tokenAmount || 1;
-        /*
-        if (tx.timestamp) timestamps.push(tx.timestamp);
-        */
+        walletBuySell.get(trader)[side] += amount || 1;
       }
       if (tx.timestamp) timestamps.push(tx.timestamp);
     }
@@ -301,8 +305,9 @@ class WashTradeDetector {
     // ── Detect self-trading (wallet appears on both sides) ──
     let selfTradeCount = 0;
     for (const [wallet, neighbors] of graph) {
-      if (neighbors.has(wallet)) {
-        selfTradeCount += neighbors.get(wallet);
+      const selfEdge = neighbors.get(wallet);
+      if (selfEdge) {
+        selfTradeCount += selfEdge.count;
         selfTrades = selfTradeCount;
       }
     }
@@ -318,15 +323,17 @@ class WashTradeDetector {
     for (let i = 0; i < Math.min(nodes.length, 80); i++) {
       const A = nodes[i];
       const aNeighbors = graph.get(A) || new Map();
-      for (const [B, count] of aNeighbors) {
-        if (count < 2) continue; // Repeated transfers more interesting
+      for (const [B, aEdge] of aNeighbors) {
+        if (aEdge.count < 2) continue; // Repeated transfers more interesting
         const bNeighbors = graph.get(B) || new Map();
-        for (const [C] of bNeighbors) {
+        for (const [C, bEdge] of bNeighbors) {
           if (C === A) continue;
           const cNeighbors = graph.get(C) || new Map();
-          const backCount = cNeighbors.get(A);
-          if (backCount && backCount >= 1) {
+          const backEdge = cNeighbors.get(A);
+          if (backEdge && backEdge.count >= 1) {
             cyclesFound++;
+            // Only the amount that actually loops back is "circular"
+            circularVolume += Math.min(aEdge.amount, bEdge.amount, backEdge.amount);
             if (cyclesFound === 1) {
               flags.push(`Circular transfer: ${A.slice(0, 6)}→${B.slice(0, 6)}→${C.slice(0, 6)}→${A.slice(0, 6)}`);
             }
@@ -349,9 +356,9 @@ class WashTradeDetector {
       flags.push(`Extreme volume diversity mismatch: ${txs.length} txs, only ${uniqueTraders} traders`);
     }
 
-    // ── Estimate circular volume ratio ──
-    let circularVolume = cyclesFound > 0 ? txs.length * 0.12 : 0;
-    const circularRatio = circularVolume / Math.max(txs.length, 1);
+    // ── Circular volume ratio from real transferred amounts ──
+    const circularRatio =
+      totalTransferVolume > 0 ? circularVolume / totalTransferVolume : 0;
 
     if (circularRatio > this.thresholds.washVolumeRatio) {
       deduction += 15;

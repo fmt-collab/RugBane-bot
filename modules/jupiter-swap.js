@@ -4,7 +4,12 @@
 // ═══════════════════════════════════════════════════════════
 
 const axios = require("axios");
-const { Connection, Keypair, VersionedTransaction } = require("@solana/web3.js");
+const {
+  Connection,
+  Keypair,
+  PublicKey,
+  VersionedTransaction,
+} = require("@solana/web3.js");
 const bs58 = require("bs58");
 
 class JupiterSwap {
@@ -79,15 +84,31 @@ class JupiterSwap {
     }
   }
 
+  async getDecimals(mint) {
+    try {
+      const info = await this.connection.getParsedAccountInfo(
+        new PublicKey(mint)
+      );
+      const decimals = info.value?.data?.parsed?.info?.decimals;
+      return Number.isInteger(decimals) ? decimals : 9;
+    } catch {
+      return 9;
+    }
+  }
+
   async buy(mintAddress, solAmount) {
-    const lamports = solAmount * 1e9;
+    // SOL has 9 decimals, so this conversion is already correct
+    const lamports = Math.floor(solAmount * 1e9);
     const quote = await this.getQuote(this.solMint, mintAddress, lamports);
     if (!quote) return { success: false, error: "No quote" };
     return this.swap(quote);
   }
 
   async sell(mintAddress, tokenAmount) {
-    const quote = await this.getQuote(mintAddress, this.solMint, tokenAmount);
+    // `tokenAmount` is human units — Jupiter needs the raw integer amount
+    const decimals = await this.getDecimals(mintAddress);
+    const raw = Math.floor(tokenAmount * Math.pow(10, decimals));
+    const quote = await this.getQuote(mintAddress, this.solMint, raw);
     if (!quote) return { success: false, error: "No quote" };
     return this.swap(quote);
   }

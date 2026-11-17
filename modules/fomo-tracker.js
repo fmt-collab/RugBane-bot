@@ -177,7 +177,9 @@ class FomoTracker {
         winRate: trader.winRate || trader.win_rate || 0,
         tradeCount: trader.tradeCount || trader.trades || 0,
         lastSeen: now,
-        recentTrades: [],
+        // Keep the previous history when we don't refetch; resetting to []
+        // made every cycle treat every trade as new and re-alert forever.
+        recentTrades: prev?.recentTrades || [],
       };
 
       // Fetch recent trades for top traders
@@ -230,7 +232,10 @@ class FomoTracker {
 
     // Alert if significant buy from top trader
     if (trader.rank <= 10 && amount >= this.config.alertThreshold) {
-      const alertKey = `${token}-${wallet}-${Date.now()}`;
+      // Keyed by trade signature so the same buy can only alert once
+      const alertKey = `${token}-${wallet}-${
+        trade.signature || trade.tx || trade.id || "unknown"
+      }`;
       if (!this.alertHistory.has(alertKey)) {
         this.alertHistory.set(alertKey, Date.now());
         

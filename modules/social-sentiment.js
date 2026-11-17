@@ -91,8 +91,13 @@ class SocialSentiment {
     // ── Thresholds for signal engine ──
     this.thresholds = {
       minSocialScoreForBuy: 30,   // minimum social score to contribute
-      maxSocialScore: 35,         // cap individual social contribution
+      maxSocialScore: 35,         // cap individual social score
+      maxContributionPoints: 15,  // cap on points added to the signal engine
+      minContributionPoints: 3,   // below this the contribution is dropped
     };
+
+    // Single flag shared with index.js and the watchlist job
+    this.enabled = true;
 
     console.log("[SocialSentiment] Initialized");
     this.printSourceStatus();
@@ -405,13 +410,13 @@ class SocialSentiment {
     // Normalize for signal engine (max 15 points)
     let contribution = Math.floor(score.socialScore * 15 / 35);
 
-    // Apply minimum threshold
-    if (contribution < this.thresholds.minSocialScoreForScore) {
+    // Apply minimum threshold (was reading an undefined key, so it never applied)
+    if (contribution < this.thresholds.minContributionPoints) {
       contribution = 0;
     }
 
-    // Cap
-    contribution = Math.min(contribution, this.thresholds.maxSocialScore);
+    // Cap at the 15-point budget this module may add to the signal engine
+    contribution = Math.min(contribution, this.thresholds.maxContributionPoints);
 
     return {
       points: contribution,
@@ -501,6 +506,7 @@ class SocialSentiment {
     bot.onText(/\/social(on|off)/, (msg, match) => {
       const chatId = msg.chat.id;
       const enabled = match[1] === "on";
+      this.enabled = enabled;
       this.config.enabled = enabled;
       bot.sendMessage(
         chatId,

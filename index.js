@@ -221,14 +221,27 @@ async function buyToken(mint, solAmount) {
   return result;
 }
 
+async function getTokenDecimals(mint) {
+  try {
+    const info = await connection.getParsedAccountInfo(new PublicKey(mint));
+    const decimals = info.value?.data?.parsed?.info?.decimals;
+    return Number.isInteger(decimals) ? decimals : 9;
+  } catch {
+    return 9;
+  }
+}
+
 async function sellToken(mint, percentage = 100) {
   const balance = await getTokenBalance(mint);
   if (balance <= 0) return { success: false, error: "No tokens to sell" };
 
   const amount = balance * (percentage / 100);
-  const lamports = amount * 1e9; // assumes 9 decimals (Solana standard)
+  // Jupiter expects the raw integer amount, scaled by the token's real decimals
+  const decimals = await getTokenDecimals(mint);
+  const rawAmount = Math.floor(amount * Math.pow(10, decimals));
+  if (rawAmount <= 0) return { success: false, error: "Amount too small to sell" };
 
-  const result = await executeSwap(mint, SOL_MINT, lamports);
+  const result = await executeSwap(mint, SOL_MINT, rawAmount);
   if (result.success) console.log(`[Sell] ${percentage}% of ${mint}`);
   return result;
 }
@@ -305,6 +318,7 @@ const profitLocker = new ProfitLocker({
   chatId: CHAT_ID,
   paperTrading: paperMode,
   solPriceUsd,
+  getSolPriceUsd: () => solPriceUsd, // live getter: index.js refreshes this every 5 min
   sellToken,
   transferSol,
 });
@@ -324,7 +338,13 @@ socialEngine.enabled = true; // Initialize enabled flag
 //  OVERRIDE SIGNAL ENGINE TRADE EXECUTION
 // ═══════════════════════════════════════════════════════════
 
-signalEngine.executeBuy = async (mint, solAmount, symbol) => {
+signalEngine.executeBuy = async (mint, solAmount, symbolInput) => {
+  // Callers pass a ticker string (commands) or a whole signal object (auto-copy)
+  const symbol =
+    typeof symbolInput === "string" && symbolInput.trim()
+      ? symbolInput.trim()
+      : symbolInput?.symbol || `${mint.slice(0, 4)}...${mint.slice(-4)}`;
+
   const safety = await washDetector.inspectToken(mint, symbol);
   if (!safety.pass) {
     await sendAlert(
@@ -352,15 +372,22 @@ signalEngine.executeBuy = async (mint, solAmount, symbol) => {
       console.error("[Buy] Failed to fetch token price:", e.message);
     }
 
-    const tokenAmount = tokenPrice > 0 ? (solAmount / tokenPrice) : 0;
+    // Birdeye quotes USD; ProfitLocker tracks positions in SOL
+    const solUsd = solPriceUsd > 0 ? solPriceUsd : 150;
+    const entryPriceSol = tokenPrice > 0 ? tokenPrice / solUsd : 0;
+    const tokenAmount = entryPriceSol > 0 ? solAmount / entryPriceSol : 0;
 
-    profitLocker.addPosition({
-      mint,
-      symbol,
-      entryPriceSol: tokenPrice,
-      tokenAmount,
-      walletId: "A"
-    });
+    if (tokenAmount <= 0) {
+      console.warn(`[Buy] No price for ${mint.slice(0, 8)} — position not tracked`);
+    } else {
+      profitLocker.addPosition({
+        mint,
+        symbol,
+        entryPriceSol,
+        tokenAmount,
+        walletId: "A"
+      });
+    }
 
     await sendAlert(
       `✅ *BOUGHT* ${symbol}\n` +
@@ -527,7 +554,8 @@ onCmd(/\/buy (.+)/, async (msg, match) => {
   const [mint, amount] = match[1].split(/\s+/);
   const sol = parseFloat(amount) || 0.05;
   await bot.sendMessage(msg.chat.id, `🛒 Buying ${sol} SOL of ${mint.slice(0, 8)}...`);
-  const result = await buyToken(mint, sol);
+  // Route through executeBuy so manual buys get the same safety check + tracking
+  const result = await signalEngine.executeBuy(mint, sol, mint.slice(0, 8));
   await bot.sendMessage(
     msg.chat.id,
     result.success ? `✅ Sent! TX: ${result.signature}` : `❌ Failed: ${result.error}`
@@ -648,13 +676,16 @@ onCmd(/\/paper (.+)/, async (msg, match) => {
     profitLocker.paperTrading = true;
     signalEngine.paperTrading = true;
     await bot.sendMessage(msg.chat.id, "📝 *Paper Trading Mode ON*", { parse_mode: "Markdown" });
-  } else {
+  } else if (action === "off") {
     paperMode = false;
     profitLocker.paperTrading = false;
     signalEngine.paperTrading = false;
     await bot.sendMessage(msg.chat.id, "🔴 *LIVE Trading Mode ON*\n⚠️ Real SOL at risk!", {
       parse_mode: "Markdown",
     });
+  } else {
+    // Never silently switch to live trading on a typo like "/paper of"
+    await bot.sendMessage(msg.chat.id, "❌ Usage: /paper on or /paper off");
   }
 });
 
@@ -703,8 +734,19 @@ app.post(`/webhook/${TOKEN}`, (req, res) => {
 });
 
 app.post("/api/signal", async (req, res) => {
-  const { mint, confidence } = req.body;
-  if (mint && confidence > 70) await sendAlert(`📡 External signal: ${mint} (score: ${confidence})`);
+  // Requires a shared secret, otherwise anyone could push messages to your chat
+  const secret = (process.env.API_SECRET || "").trim();
+  if (!secret) {
+    return res.status(503).json({ ok: false, error: "API_SECRET not configured" });
+  }
+  if (req.get("x-api-key") !== secret) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+
+  const { mint, confidence } = req.body || {};
+  if (mint && Number(confidence) > 70) {
+    await sendAlert(`📡 External signal: ${mint} (score: ${confidence})`);
+  }
   res.json({ ok: true });
 });
 

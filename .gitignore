@@ -1,0 +1,12 @@
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+
+# Runtime state written by the bot
+data/*.json
+
+# Dependencies / OS noise
+node_modules/
+npm-debug.log*
+.DS_Store

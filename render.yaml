@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: rugbane
+    runtime: node
+    plan: starter          # switch to "free" to test (free instances sleep when idle)
+    region: oregon
+    branch: main
+    buildCommand: npm install --omit=dev --no-audit --no-fund
+    startCommand: node index.js
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      # Safe default: no real funds are used until you flip this in the dashboard
+      - key: PAPER_TRADING
+        value: "true"
+      - key: PAPER_START_BALANCE_SOL
+        value: "100"
+      # Secrets: Render prompts you for these on first deploy (sync: false)
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: PRIVATE_KEY
+        sync: false
+      - key: COLD_WALLET_ADDRESS
+        sync: false
+      - key: HELIUS_RPC_URL
+        sync: false
+      - key: HELIUS_WS_URL
+        sync: false
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: BIRDEYE_API_KEY
+        sync: false
+      - key: API_SECRET
+        sync: false

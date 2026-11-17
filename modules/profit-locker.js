@@ -64,6 +64,9 @@ class ProfitLockerV3 {
 
     this.solPriceUsd = config.solPriceUsd || 150;
     this.solPriceUsdTs = 0;
+    // Live getter from index.js so USD conversions don't freeze at the boot value
+    this.getSolPriceUsd =
+      typeof config.getSolPriceUsd === "function" ? config.getSolPriceUsd : null;
 
     this.state = this.loadState();
     this.checkTimer = null;
@@ -163,6 +166,11 @@ class ProfitLockerV3 {
     }
   }
 
+  solPrice() {
+    const live = this.getSolPriceUsd ? Number(this.getSolPriceUsd()) : 0;
+    return Number.isFinite(live) && live > 0 ? live : this.solPriceUsd;
+  }
+
   // ═══════════════════════════════════════
   //  POSITION TRACKING
   // ═══════════════════════════════════════
@@ -206,7 +214,9 @@ class ProfitLockerV3 {
           timeout: 5000,
         }
       );
-      const price = res.data?.data?.price || 0;
+      const priceUsd = res.data?.data?.price || 0;
+      // Birdeye quotes USD; positions are tracked in SOL
+      const price = priceUsd > 0 ? priceUsd / this.solPrice() : 0;
       this.priceCache.set(mint, { price, ts: Date.now() });
       return price;
     } catch {
@@ -271,10 +281,11 @@ class ProfitLockerV3 {
             mint, pos, sellAmount,
             `🎯 LADDER ${rung.mult}x → sell ${rung.pct}%`
           );
-          // Transfer profit to cold wallet
+          // Move realized profit (not the whole position value) to the cold wallet
           if (this.coldWallet && sellAmount > 0) {
-            const profitSol = (sellAmount / 100) * pos.tokenAmount * currentPrice;
-            await this.transferToCold(profitSol * 0.9); // 90% to cold
+            const tokensSold = pos.tokenAmount * (sellAmount / 100);
+            const profitSol = tokensSold * (currentPrice - pos.entryPriceSol);
+            if (profitSol > 0) await this.transferToCold(profitSol * 0.9); // 90% to cold
           }
         }
       }
@@ -298,8 +309,9 @@ class ProfitLockerV3 {
           );
           // Transfer all to cold
           if (this.coldWallet) {
-            const profitSol = (remaining / 100) * pos.tokenAmount * currentPrice;
-            await this.transferToCold(profitSol * 0.9);
+            const tokensSold = pos.tokenAmount * (remaining / 100);
+            const profitSol = tokensSold * (currentPrice - pos.entryPriceSol);
+            if (profitSol > 0) await this.transferToCold(profitSol * 0.9);
           }
         }
       }
@@ -316,7 +328,7 @@ class ProfitLockerV3 {
 
     const mult = pos.currentPriceSol / pos.entryPriceSol;
     const pnlSol = ((pos.currentPriceSol - pos.entryPriceSol) * pos.tokenAmount * (actualSellPct / 100));
-    const pnlUsd = pnlSol * this.solPriceUsd;
+    const pnlUsd = pnlSol * this.solPrice();
 
     this.send(
       `💰 SELL ${pos.symbol}\n` +
@@ -402,8 +414,10 @@ class ProfitLockerV3 {
     }
 
     for (const pos of open) {
-      const invested = pos.entryPriceSol * pos.tokenAmount;
-      const current = pos.currentPriceSol * pos.tokenAmount;
+      // Only the unsold remainder is still open exposure
+      const remaining = Math.max(0, 100 - (pos.soldPct || 0)) / 100;
+      const invested = pos.entryPriceSol * pos.tokenAmount * remaining;
+      const current = pos.currentPriceSol * pos.tokenAmount * remaining;
       totalInvested += invested;
       totalCurrent += current;
 
@@ -422,7 +436,7 @@ class ProfitLockerV3 {
       totalInvestedSol: totalInvested,
       totalCurrentSol: totalCurrent,
       totalPnlSol: totalPnl,
-      totalPnlUsd: totalPnl * this.solPriceUsd,
+      totalPnlUsd: totalPnl * this.solPrice(),
       pnlPct,
       walletBreakdown,
       coldWalletAddress: this.coldWallet,
@@ -486,7 +500,7 @@ class ProfitLockerV3 {
     msg += `Total trades:    ${trades.length}\n`;
     msg += `Wins / Losses:   ${wins.length} / ${losses.length}\n`;
     msg += `Win rate:        ${((wins.length / trades.length) * 100).toFixed(1)}%\n`;
-    msg += `Net P&L:         ${totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(4)} SOL (~$${(totalPnl * this.solPriceUsd).toFixed(2)})\n`;
+    msg += `Net P&L:         ${totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(4)} SOL (~$${(totalPnl * this.solPrice()).toFixed(2)})\n`;
     msg += `Avg hold:        ${avgH}h ${avgM}m\n`;
     msg += `Best trade:      ${best.pnlSol >= 0 ? "+" : ""}${best.pnlSol.toFixed(4)} SOL ($${best.symbol})\n`;
     msg += `Worst trade:     ${worst.pnlSol.toFixed(4)} SOL ($${worst.symbol})\n`;
@@ -618,8 +632,7 @@ class ProfitLockerV3 {
       let msg_text = `🔒 PROFIT LOCK STATUS\n`;
       for (const pos of open) {
         const mult = pos.currentPriceSol / pos.entryPriceSol;
-        const status =
-          mult >= this.state.settings.stopLossX ? "🟢" : "🔴";
+        const status = mult >= 1 ? "🟢" : "🔴";
         msg_text += `${status} $${pos.symbol} ${mult.toFixed(2)}x | sold ${pos.soldPct.toFixed(0)}% | moon bag ${pos.moonBagPct}%\n`;
       }
       this.send(msg_text);

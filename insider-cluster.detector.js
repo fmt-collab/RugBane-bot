@@ -350,10 +350,15 @@ class InsiderClusterDetector {
   // ── Token balance helper ──
   async getTokenBalance(mint, wallet) {
     try {
-      const res = await this.connection.getTokenAccountBalance(
-        new PublicKey(wallet)
+      // `wallet` is an owner address — resolve its token account for this mint
+      const res = await this.connection.getParsedTokenAccountsByOwner(
+        new PublicKey(wallet),
+        { mint: new PublicKey(mint) }
       );
-      return res.value.uiAmount || 0;
+      return (res.value || []).reduce(
+        (sum, a) => sum + (a.account.data.parsed.info.tokenAmount.uiAmount || 0),
+        0
+      );
     } catch {
       return 0;
     }

@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "RugBane - Advanced Solana Trading Bot",
   "main": "index.js",
+  "engines": {
+    "node": ">=20 <23"
+  },
   "scripts": {
     "start": "node index.js"
   },

@@ -251,7 +251,11 @@ class FomoSignalEngine {
             break;
           }
           console.log(`[Signal] AUTO-BUY triggered: ${sig.mint} (score: ${sig.total})`);
-          await this.executeBuy(sig.mint, this.maxTradeSizeSol, sig);
+          await this.executeBuy(
+            sig.mint,
+            this.maxTradeSizeSol,
+            sig.mint.slice(0, 4) + "..." + sig.mint.slice(-4)
+          );
         }
       }
     }
