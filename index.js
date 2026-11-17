@@ -29,6 +29,7 @@ const RealtimeMonitor = require("./modules/realtime-monitor");
 const ProfitLocker = require("./modules/profit-locker");
 const WashTradeDetector = require("./modules/wash-trade-detector");
 const SocialSentiment = require("./modules/social-sentiment");
+const UiManager = require("./modules/ui-manager");
 
 // ═══════════════════════════════════════════════════════════
 //  CONFIG
@@ -81,6 +82,7 @@ if (WALLET_PRIVATE_KEY && WALLET_PRIVATE_KEY !== "paste-generated-private-key-he
 // ── State ──
 let solPriceUsd = 150;
 let isRunning = true;
+let swapSlippageBps = 500; // changed live from /menu → Settings
 
 // ── Only the owner chat may use commands ──
 function onCmd(regex, handler) {
@@ -166,7 +168,7 @@ async function getTokenBalance(mintAddress) {
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
-async function executeSwap(inputMint, outputMint, amountLamports, slippageBps = 500) {
+async function executeSwap(inputMint, outputMint, amountLamports, slippageBps = swapSlippageBps) {
   if (paperMode) {
     console.log(`[Paper] Swap ${inputMint} → ${outputMint}`);
     return { success: true, signature: "PAPER_TRADE", amount: amountLamports / LAMPORTS_PER_SOL };
@@ -334,6 +336,41 @@ const washDetector = new WashTradeDetector({
 const socialEngine = new SocialSentiment({ telegramBot: bot, chatId: CHAT_ID });
 socialEngine.enabled = true; // Initialize enabled flag
 
+// ── Telegram trading terminal (inline-keyboard UI) ──
+const ui = new UiManager({
+  bot,
+  chatId: CHAT_ID,
+  services: {
+    signalEngine,
+    profitLocker,
+    rugCheck,
+    washDetector,
+    honeypotDetector,
+    getSolBalance,
+    buy: (mint, sol, symbol) => signalEngine.executeBuy(mint, sol, symbol),
+    sellToken,
+    getSolPrice: () => solPriceUsd,
+    getPaperMode: () => paperMode,
+    setPaperMode: (v) => {
+      paperMode = v;
+      profitLocker.paperTrading = v;
+      signalEngine.paperTrading = v;
+    },
+    setSlippage: (bps) => {
+      swapSlippageBps = bps;
+    },
+  },
+});
+
+bot.on("callback_query", (q) => {
+  ui.handleCallback(q).catch((e) => console.error("[UI]", e.message));
+});
+
+// Multi-step flows (token address / custom amount) arrive as plain text
+bot.on("message", (msg) => {
+  ui.handleMessage(msg).catch((e) => console.error("[UI]", e.message));
+});
+
 // ═══════════════════════════════════════════════════════════
 //  OVERRIDE SIGNAL ENGINE TRADE EXECUTION
 // ═══════════════════════════════════════════════════════════
@@ -411,25 +448,15 @@ signalEngine.executeSell = async (mint, percentage, symbol) => {
 //  TELEGRAM COMMAND HANDLERS
 // ═══════════════════════════════════════════════════════════
 
-onCmd(/\/start/, async (msg) => {
-  await bot.sendMessage(
-    msg.chat.id,
-    `🐻 *Welcome to RugBane!*\n\n` +
-      `I watch smart wallets, detect rug risks, and auto-trade on Solana.\n\n` +
-      `📋 *Quick Start:*\n` +
-      `1. /status — bot health\n` +
-      `2. /portfolio — your positions\n` +
-      `3. /autocopy on — copy trading\n\n` +
-      `💡 All commands: /help`,
-    { parse_mode: "Markdown" }
-  );
+onCmd(/\/start|\/menu/, async (msg) => {
+  await ui.showMainMenu(msg.chat.id);
 });
 
 onCmd(/\/help/, async (msg) => {
   await bot.sendMessage(
     msg.chat.id,
     `📋 *RugBane Commands*\n\n` +
-      `*Main:* /status /portfolio /stats /lock\n` +
+      `*Main:* /menu /status /portfolio /stats /lock\n` +
       `*Trading:* /autocopy on|off /signal <ticker> /buy <mint> <sol> /sell <mint> <pct>\n` +
       `*Safety:* /safety <mint> (rug) /trust <mint> (score) /honeypot <mint>\n` +
       `*FOMO:* /fomo trending /fomo leaderboard\n` +
