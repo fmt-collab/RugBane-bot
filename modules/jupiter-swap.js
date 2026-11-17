@@ -26,7 +26,7 @@ class JupiterSwap {
 
   async getQuote(inputMint, outputMint, amount, slippageBps = 50) {
     try {
-      const { data } = await axios.get("https://quote-api.jup.ag/v6/quote", {
+      const { data } = await axios.get("https://lite-api.jup.ag/swap/v1/quote", {
         params: {
           inputMint,
           outputMint,
@@ -55,7 +55,7 @@ class JupiterSwap {
 
     try {
       const { data } = await axios.post(
-        "https://quote-api.jup.ag/v6/swap",
+        "https://lite-api.jup.ag/swap/v1/swap",
         {
           quoteResponse,
           userPublicKey: this.wallet.publicKey.toBase58(),

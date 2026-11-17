@@ -176,7 +176,7 @@ async function executeSwap(inputMint, outputMint, amountLamports, slippageBps = 
   if (!wallet) return { success: false, error: "No wallet loaded" };
 
   try {
-    const quoteRes = await axios.get("https://quote-api.jup.ag/v6/quote", {
+    const quoteRes = await axios.get("https://lite-api.jup.ag/swap/v1/quote", {
       params: {
         inputMint,
         outputMint,
@@ -188,7 +188,7 @@ async function executeSwap(inputMint, outputMint, amountLamports, slippageBps = 
     });
 
     const swapRes = await axios.post(
-      "https://quote-api.jup.ag/v6/swap",
+      "https://lite-api.jup.ag/swap/v1/swap",
       {
         quoteResponse: quoteRes.data,
         userPublicKey: wallet.publicKey.toBase58(),
